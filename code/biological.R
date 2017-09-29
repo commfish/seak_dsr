@@ -9,6 +9,7 @@ library(broom)
 
 # data ----
 fishery <- read_csv("data/fish_bio_data.csv")
+rov <- read_csv("data/YE_Length_Data_forKray.csv")
 
 # data cleaning ----
 names (fishery) <- c('year', 'proj', 'trip', 'adfg', 'Vessel', 'sell_date', 
@@ -20,12 +21,14 @@ fishery %>%
 	mutate(Year = factor(year)) -> fishery
 
 fishery %>% 
-	filter(sex==2, !is.na(length), !is.na(age)) -> female
+	filter(sex==2, !is.na(age), !is.na(weight)) %>% 
+	mutate(age = ifelse(age > 75, 75, age)) %>% 
+	dplyr::select(age, weight)-> wt
 
+write_delim(wt, "vonb/wt_dat")
 # create maturity dataset
-fishery %>% 
-	filter(maturity < 9 & !is.na(maturity), 
-			 sex==2, !is.na(age), !is.na(length)) %>% 
+female %>% 
+	filter(maturity < 9 & !is.na(maturity)) %>% 
 	mutate(mature = ifelse(maturity<3, 0, 1),
 			 mature = ifelse(age > 40, 1, mature),
 			 age = ifelse(age > 75, 75, age),
@@ -46,12 +49,56 @@ summary(fit)
 newd <- data.frame(age=8:75)
 newd$pred = predict(fit, newd, type='response')
 
-ggplot(newd, aes(age, pred)) + stat_summary(fun.data=mean_cl_boot, geom='smooth')
-newd %>% 
-	arrange(age)
+ggplot(newd, aes(age, pred)) + geom_line()
+
+# 50% maturity ----
+-coef(fit)[1] / coef(fit)[2]
 
 # length-at-age ----
-add <- nls(length ~ Linf * (1 - exp(-k * (age - t0))), start=list(Linf=600, k=0.1, t0=0.1), data=female)
-mult <- nls(log(length) ~ log(Linf) + log(1 - exp(-k * (age - t0))), start=list(Linf=6, k=0.1, t0=-2), data=female)
+# use the ADMB code 
+Linf = 658.7700
+k = 0.0389
+t0 = -11.6100
 
-tidy(add)
+lvb <- function(age, k, Linf, t0) 
+{
+	Linf*(1-exp(-k*(age-t0)))
+}
+
+plot(8:75, lvb(8:75, k, Linf, t0))
+
+# weight-at-age ----
+
+waa <- gam(weight~s(age, k=3), data=mat, gamma=1.4, Gamma(link="log"))
+plot(waa)
+summary(waa)
+sum(resid(waa)^2)
+# 10108.77
+
+
+
+# use the ADMB code 
+Winf = 6.33510564697
+k = 0.0253631950840
+t0 = 5.28567887127
+
+wvb <- function(age, k, Winf, t0) 
+{
+	Winf*(1-exp(-k*(age-t0)))
+}
+
+plot(8:75, wvb(8:75, k, Winf, t0))
+
+wt %>% 
+	mutate(wvb = wvb(age,k, Winf, t0),
+			 gam = predict(waa, ., type='response'), 
+			 vbr = weight-wvb,
+			 gr = weight-gam) %>% 
+	summarise(vb = sum(vbr^2),
+				 g = sum(gr^2))
+
+
+%>% 
+	ggplot(aes(age, wvb)) + geom_line() + 
+	geom_line(aes(age, gam), color=4)
+	
